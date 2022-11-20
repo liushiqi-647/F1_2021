@@ -1,0 +1,403 @@
+---
+title: "Sta 523 - Fall 2022 - Midterm 1"
+subtitle: "Due Wednesday, October 19th by 5:00 pm."
+author: Shiqi Liu
+format: 
+  html:
+    self-contained: true
+---
+
+Before you start be sure to read through *all* of the rules and instructions in the `README.md`.
+
+<br/>
+
+### Data & Setup
+
+```{r message=FALSE}
+library(tidyverse)
+f1 = readRDS(file="data/f1.rds")
+options(dplyr.summarise.inform = FALSE)
+```
+
+-----
+
+### Task 1 - Tidy the data
+
+#### Write up
+
+The f1 data just read is super raw, so the first thing to do is to find which 
+branches of the data are needed. I keep using the dollor sign to go deeper and 
+deeper into the data, and find all useful data is inside f1\$MRData\$RaceTable\$Races. 
+Then, I just need to use unnest or hoist function to spread out the data set, 
+select columns I want, and convert the types of some features.
+
+
+#### Code
+
+```{r task1}
+
+(f1_df=
+   # Extract useful data and convert it to a tibble, and get a 22*1 data 
+   # frame with one column name: Races 
+   tibble::tibble(Races=f1$MRData$RaceTable$Races)%>%
+   # Citation: https://tidyr.tidyverse.org/reference/hoist.html
+   # Extract wanted columns from Races, and get a 22*5 data frame with column 
+   # names: round, raceName, date, Results, Races
+   hoist(
+     Races,
+     "round",
+     "raceName",
+     "date",
+     "Results"
+   )%>%
+   # Vertically extand the data frame by Results and get a 440*5 data frame
+   # with columns names same as before.
+   unnest_longer(Results)%>%
+   # Extract wanted columns from Results, and get a 440*10 data frame with  
+   # column names: round, raceName, date, points, positionText, givenName, 
+   # familyName, constructor, Results, Races
+   hoist(
+     Results,
+     "points",
+     "positionText",
+     givenName=list("Driver","givenName"),
+     familyName=list("Driver","familyName"),
+     constructor=list("Constructor","name")
+   )%>%
+   # Add a new column driver, combining givenName and familyName, and get a 
+   # 440*11 data frame with one more column (driver) than before.
+   mutate(driver=paste(givenName,familyName))%>%
+   # Select and rename columns, and get a 440*7 data frame with column names:
+   # race_name, round, date, driver, constructor, position, points.
+   select(
+     race_name=raceName,
+     round,
+     date,
+     driver,
+     constructor,
+     position=positionText,
+     points
+   )%>%
+   # Convert round, position points to integer class.
+   mutate(
+     across(
+       c(round,points),
+       as.integer
+     ),
+     position=as.integer(str_extract(position, "[0-9]+"))
+   )%>%
+   # Convert column "date" to date class.
+   mutate(
+     across(
+       date,
+       as.Date
+     )
+   )
+)%>%
+  # Show the first ten rows of f1_df data frame.
+  head(440)
+```
+
+
+-----
+
+
+### Task 2 - Drivers' Championship
+
+#### Write up
+
+First, I pivot_wider the data set to have points and position for each race as 
+a column and each driver as a row. Then, I add all points up for each driver and 
+remove columns for points of every single race. However, when printing the data 
+frame, I find that it is too wide, because the names of races are too long. 
+So, I write a function to abbreviate the race names. I choose their first three 
+letters as their abbreviation, since the first three letters are more informative 
+than just using abreviate function, built in r. Fortunately, all race_names have 
+different first three letters, so this method will not cause any conflicts in 
+future.
+
+#### Code
+
+```{r task2}
+
+# Citation: https://dplyr.tidyverse.org/reference/rename.html
+# Use this function to abbreviate race_name to three upper letters.
+abbrev1=function(x){
+  x=toupper(substr(x,10,12))
+  x
+}
+
+f1_df%>%
+  # Abbreviate race_name to three upper letters.
+  #mutate(race_name=toupper(substr(race_name,1,3)))%>%
+  # pivot_wider the data frame and get a 21*45 data frame. For each of the 21 
+  # drivers, his position and points earned for each races are displayed. And it 
+  # has 22 columns of position and 22 columns of points. 
+  pivot_wider(
+    id_cols=driver,
+    names_from=race_name,
+    values_from=c(position,points)
+  )%>%
+  # Compute the total points earned by each driver throught the whole seacon.
+  # And add it after the last column of the data frame.
+  mutate(
+    # Citation: https://stackoverflow.com/questions/28873057/sum-across-multiple
+    # -columns-with-dplyr
+    points=as.integer(rowSums(.[24:45],na.rm=TRUE))
+  )%>%
+  # Sort the data by total points in a descending order.
+  arrange(desc(points))%>%
+  # Select position columns and total points column.
+  select(c(1:23, 46))%>%
+  # Citation: https://dplyr.tidyverse.org/reference/rename.html
+  # Abbreviate race_name to three upper letters.
+  rename_with(abbrev1,starts_with("posi"))%>%
+  # Print out the data frame.
+  knitr::kable(caption = "World Drivers' Championship standings", format = "html",
+               align ="lccccccccccccccccccccccc")
+```
+
+-----
+
+### Task 3 - Cumulative Constructors
+
+#### Write up
+
+In this task, I first tried to pivot_wider the data frame and then use cumsum() 
+by row to get the cumulative points. However, it was so difficult and I tried 
+lots of methods and none of them worked. So, I went back to the begening and 
+did cumsum() by columns and then pivot_wider the data set. Though this method 
+is counter-intuitive for myself at least, it works! Then, the rest of the works 
+is similar to Task 2.
+
+#### Code
+
+```{r task3 , warning=FALSE}
+# Citation: https://dplyr.tidyverse.org/reference/rename.html
+# Use this function to abbreviate race_name to three upper letters.
+abbrev2=function(x){
+  x=toupper(substr(x,1,3))
+  x
+}
+
+(f1_df3=
+f1_df%>%
+  # Group the data by constructor and race_name. Also, group by round, though 
+  # it works as same as race_name, it will help us to arrange data frame later.
+  group_by(race_name,constructor,round)%>%
+  # Sum up points earned by two drivers in each team by each race.
+  summarise(points=sum(points))%>%
+  # Group the data by team and arrange it by round in ascending order.
+  group_by(constructor)%>%
+  arrange(round)%>%
+  # Compute the cumulative points earned by each of the 10 teams at the end of 
+  # each of the 22 races of the 2021 season.
+  mutate(
+    # Citation: https://www.rdocumentation.org/packages/base/versions/3.6.2/
+    # topics/cumsum
+    points=cumsum(points)
+  )%>%
+  # Arrange the data frame by round in ascending order.
+  arrange(round)%>%
+  # pivot_wider the data frame and get a 10*23 data frame. For each of the 10 
+  # teams, its cummulative points at the end of  each races are displayed.
+  pivot_wider(
+    id_cols=constructor,
+    names_from=race_name,
+    values_from=points
+  )%>%
+  # Citation: https://dplyr.tidyverse.org/reference/rename.html
+  # Abbreviate race_name to three upper letters.
+  rename_with(abbrev2,ends_with("Prix"))%>%
+  # Arrange the data frame by the total points earned by each team in ascending 
+  # order.
+  arrange(desc(ABU))%>%
+  # Print out the data frame.
+  knitr::kable(caption = "World Constructors' Championship standings", format = "html",
+               align ="lccccccccc")
+)
+
+```
+
+
+
+-----
+
+### Task 4 - Visualization
+
+#### Write up
+
+In this Task, I want to use animations (done by gganimate) to show the 
+performance of each driver and team throughout the whole season. I just use some 
+codes from lecture Visualizaiton Design, and they work perfectly. Then, I draw two
+animations for teams and drivers respectively. However, I realize it is impossible
+to combine the two animation plots with plot_layout(). Then, I find a method 
+online and it works again! Lucky me!
+\\
+From the plot we can see that Mercedes and Red Bull are leading the cumulateive 
+points of teams by a large margin, and Max Verstappen and Lewis Hamilton are 
+leading the cumulative points of drivers by a large margin too. At the end of 
+the season, Mercedes wins the constructor champinship and Max Verstappen from 
+Red Bull wins the driver champinship. Verstappen overtakes Hamilton on the final 
+lap of the final round at Abu Dhabi Grand Prix. Poor Hamilton!
+
+
+#### Code
+
+
+```{r task4,message=FALSE}
+
+
+p1=
+f1_df%>%
+  # Group the data by constructor and race_name. Also, group by round, though 
+  # it works as same as race_name, it will help us to arrange data frame later.
+  group_by(race_name,constructor,round)%>%
+  # Sum up points earned by two drivers in each team by each race.
+  summarise(points=sum(points))%>%
+  # Group the data by team and arrange it by round in ascending order.
+  group_by(constructor)%>%
+  arrange(round)%>%
+  # Compute the cumulative points earned by each of the 10 teams at the end of 
+  # each of the 22 races of the 2021 season.
+  mutate(
+    # Citation: https://www.rdocumentation.org/packages/base/versions/3.6.2/
+    # topics/cumsum
+    points=cumsum(points)
+  )%>%
+  # Arrange the data frame by round in ascending order.
+  arrange(round)%>%
+  ggplot(aes(x=round,y=points,group=constructor,color=constructor))+
+  geom_line()+
+  # Add a segment from points to the left, pointing to constructors
+  geom_segment(
+    aes(xend=24,yend=points),
+    linetype=2,
+    color='grey'
+  )+
+  geom_point(size=1.5)+
+  # print the constructors' name
+  geom_text(
+    aes(x = 24, label = constructor),
+    hjust = 0
+  )+
+  # print the round of race
+  geom_text(
+    aes(y = -10, label = str_glue("Round {as.integer(round)}"), group=NULL),
+    hjust = 0,
+    color='black'
+  )+
+  # Add the value of cumulative points around the points
+  geom_text(
+    # Citation: https://community.rstudio.com/t/gganimate-show-rounded-values
+    # -during-transition/62325
+    aes(x = round, label = format(round(points))),
+    hjust =0,
+    vjust=0
+  )+
+  
+  theme_minimal()+
+  theme(legend.position = "none")+
+  gganimate::transition_reveal(round) +
+  coord_cartesian(clip='off')+ 
+  theme(plot.margin = margin(5.5, 60, 5.5, 5.5))+
+  labs(
+    title='F1 2021: Team Performance',
+    y='Cumulative points',
+    x='Round'
+  )
+# Citation: https://towardsdatascience.com/how-to-combine-animated-plots-in-r-
+# 734c6c952315
+# Save the animation as a gif file
+library(gganimate)
+a_gif <- animate(p1, 
+                 fps = 10, 
+                 duration = 11,
+                 width = 600, height = 600, 
+                 renderer = gifski_renderer("animation1.gif"))
+p2=
+f1_df%>%
+  # Group the data by constructor and race_name. Also, group by round, though 
+  # it works as same as race_name, it will help us to arrange data frame later.
+  group_by(race_name,driver,round,constructor)%>%
+  # Sum up points earned by two drivers in each team by each race.
+  summarise(points=sum(points))%>%
+  # Group the data by team and arrange it by round in ascending order.
+  group_by(driver)%>%
+  arrange(round,constructor)%>%
+  # Compute the cumulative points earned by each of the 10 teams at the end of 
+  # each of the 22 races of the 2021 season.
+  mutate(
+    # Citation: https://www.rdocumentation.org/packages/base/versions/3.6.2/
+    # topics/cumsum
+    points=cumsum(points)
+  )%>%
+  # Arrange the data frame by round in ascending order.
+  arrange(round)%>%
+  ggplot(aes(x=round,y=points,group=driver,color=driver))+
+  # print the data as a line
+  geom_line()+
+  # Add a segment from points to the left, pointing to drivers
+  geom_segment(
+    aes(xend=24,yend=points),
+    linetype=2,
+    color='grey'
+  )+
+  geom_point(size=1.5)+
+  # print the drivers' name
+  geom_text(
+    aes(x = 24, label = driver),
+    hjust = 0
+  )+
+  # print the round of race
+  geom_text(
+    aes(y = -10, label = str_glue("Round {as.integer(round)}"), group=NULL),
+    hjust = 0,
+    color='black'
+  )+
+  # Add the value of cumulative points around the points
+  geom_text(
+    aes(x = round, label = format(round(points))),
+    hjust =0,
+    vjust=0
+  )+
+  
+  theme_minimal()+
+  theme(legend.position = "none")+
+  gganimate::transition_reveal(round) +
+  coord_cartesian(clip='off')+ 
+  theme(plot.margin = margin(5.5, 60, 5.5, 5.5))+
+  labs(
+    title='F1 2021: Driver Performance',
+    y='Cumulative points',
+    x='Round'
+  )
+# Save the animation as a gif file
+b_gif <- animate(p2, 
+                 fps = 10, 
+                 duration = 11,
+                 width = 600, height = 600, 
+                 renderer = gifski_renderer("animation2.gif"))
+
+# Combine the 2 gif files
+
+library(magick)
+a_mgif <- image_read(a_gif)
+b_mgif <- image_read(b_gif)
+
+new_gif <- image_append(c(a_mgif[1], b_mgif[1]), stack = FALSE)
+for(i in 2:109){
+  combined <- image_append(c(a_mgif[i], b_mgif[i]), stack = FALSE)
+  new_gif <- c(new_gif, combined)
+}
+for(i in 1:35){
+  combined <- image_append(c(a_mgif[109], b_mgif[109]), stack = FALSE)
+  new_gif <- c(new_gif, combined)
+}
+
+# Show the printed gif file
+new_gif
+```
+
+-----
+
